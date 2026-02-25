@@ -23,6 +23,25 @@
 	flex-shrink: 0;
 }
 
+.hv-gh-link {
+	display: inline-flex;
+	align-items: center;
+	vertical-align: middle;
+	color: var(--ui-text-muted);
+	opacity: 0.5;
+	transition: opacity 0.15s;
+
+	&:hover {
+		opacity: 1;
+	}
+}
+
+.hv-gh-icon {
+	width: 24px;
+	height: 24px;
+	fill: currentColor;
+}
+
 .hv-app-title {
 	font-weight: 700;
 	font-size: 15px;
