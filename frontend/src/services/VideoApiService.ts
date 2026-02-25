@@ -30,30 +30,31 @@ export interface VideoDetails {
 	duration: number; // seconds
 }
 
-export class VideoApiService {
+import { BaseApiService } from './BaseApiService';
+
+export class VideoApiService extends BaseApiService {
+	constructor() {
+		super('/api/videos');
+	}
+
 	async getVideos(): Promise<VideoInfo[]> {
-		const res = await fetch('/api/videos');
-		if (!res.ok) throw new Error(`Failed to list videos: ${res.status}`);
-		return res.json();
+		return this.request<VideoInfo[]>('');
 	}
 
 	async getDetails(videoId: string): Promise<VideoDetails> {
-		const res = await fetch(`/api/videos/${videoId}/info`);
-		if (!res.ok) throw new Error(`Failed to get video info: ${res.status}`);
-		return res.json();
+		return this.request<VideoDetails>(`/${videoId}/info`);
 	}
 
+	// Raw URLs — consumed by hls.js directly, must not go through the fetch wrapper
 	getMasterPlaylistUrl(videoId: string): string {
-		return `/api/videos/${videoId}/hls/master.m3u8`;
+		return `${this.baseUrl}/${videoId}/hls/master.m3u8`;
 	}
 
 	getSubtitleUrl(videoId: string, streamIndex: number): string {
-		return `/api/videos/${videoId}/subs/${streamIndex}.vtt`;
+		return `${this.baseUrl}/${videoId}/subs/${streamIndex}.vtt`;
 	}
 
 	async getVideoByPath(filePath: string): Promise<VideoInfo> {
-		const res = await fetch(`/api/videos/by-path?path=${encodeURIComponent(filePath)}`);
-		if (!res.ok) throw new Error(`Video not found for path: ${filePath}`);
-		return res.json();
+		return this.request<VideoInfo>(`/by-path?path=${encodeURIComponent(filePath)}`);
 	}
 }
