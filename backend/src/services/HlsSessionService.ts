@@ -111,7 +111,7 @@ export class HlsSessionService {
 
 		// Codecs
 		args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23');
-		args.push('-c:a', 'aac', '-b:a', '128k');
+		args.push('-c:a', 'aac', '-b:a', '128k', '-ac', '2'); // force stereo — browsers can't decode 5.1 AAC via MSE
 
 		// Force pixel format (compatibility)
 		args.push('-pix_fmt', 'yuv420p');
