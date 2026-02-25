@@ -172,6 +172,7 @@ export class HlsSessionService {
 			'-start_number', String(startSegment),
 			'-hls_segment_filename', `${sessionDir}/%v/seg%06d.ts`,
 			'-hls_flags', 'independent_segments',
+			`${sessionDir}/%v/stream.m3u8`
 		);
 
 		console.log(`[FFmpeg] Starting session ${videoId} from seg ${startSegment}: ${videoPath}`);
