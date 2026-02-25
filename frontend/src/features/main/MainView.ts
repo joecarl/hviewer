@@ -14,6 +14,19 @@ export const MainView = component(() => {
 	const loading = signal(true);
 	const errorMsg = signal<string | null>(null);
 
+	// ── Sync selected video with URL query param ──────────────────────────────
+	const setSelectedId = (id: string | null) => {
+		selectedId.set(id);
+		const url = new URL(window.location.href);
+		if (id) {
+			url.searchParams.set('videoId', id);
+		} else {
+			url.searchParams.delete('videoId');
+			url.searchParams.delete('file');
+		}
+		window.history.replaceState(null, '', url.toString());
+	};
+
 	// ── Load video list ───────────────────────────────────────────────────────
 	const load = async () => {
 		try {
@@ -21,6 +34,22 @@ export const MainView = component(() => {
 			errorMsg.set(null);
 			const list = await api.getVideos();
 			videos.set(list);
+
+			// ── Open file from query params ───────────────────────────────────
+			const params = new URLSearchParams(window.location.search);
+			const filePath = params.get('file');
+			const videoIdParam = params.get('videoId');
+
+			if (filePath) {
+				try {
+					const video = await api.getVideoByPath(filePath);
+					setSelectedId(video.id);
+				} catch {
+					errorMsg.set(`Cannot open file: ${filePath}`);
+				}
+			} else if (videoIdParam && list.some((v) => v.id === videoIdParam)) {
+				setSelectedId(videoIdParam);
+			}
 		} catch (e) {
 			errorMsg.set((e as Error).message);
 		} finally {
@@ -62,7 +91,7 @@ export const MainView = component(() => {
 				}
 				return list.map((v) =>
 					tpl.videoItem({
-						onclick: () => selectedId.set(v.id),
+						onclick: () => setSelectedId(v.id),
 						classes: { 'is-selected': () => selectedId.get() === v.id },
 						nodes: {
 							videoItemExt: { inner: v.ext.replace('.', '').toUpperCase() },
@@ -86,7 +115,7 @@ export const MainView = component(() => {
 				if (!id) return '';
 				return PlayerView({
 					videoId: id,
-					onBack: () => selectedId.set(null),
+					onBack: () => setSelectedId(null),
 				});
 			},
 		},

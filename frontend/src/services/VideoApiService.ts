@@ -40,4 +40,10 @@ export class VideoApiService {
 	getSubtitleUrl(videoId: string, streamIndex: number): string {
 		return `/api/videos/${videoId}/subs/${streamIndex}.vtt`;
 	}
+
+	async getVideoByPath(filePath: string): Promise<VideoInfo> {
+		const res = await fetch(`/api/videos/by-path?path=${encodeURIComponent(filePath)}`);
+		if (!res.ok) throw new Error(`Video not found for path: ${filePath}`);
+		return res.json();
+	}
 }

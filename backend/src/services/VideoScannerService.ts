@@ -45,7 +45,7 @@ export class VideoScannerService {
 				const ext = path.extname(entry.name).toLowerCase();
 				if (VIDEO_EXTENSIONS.has(ext)) {
 					const stats = statSync(fullPath);
-					const id = crypto.createHash('sha256').update(fullPath).digest('hex').slice(0, 16);
+					const id = crypto.createHash('sha256').update(fullPath).digest('hex');
 					results.push({
 						id,
 						name: path.basename(entry.name, ext),
@@ -60,5 +60,15 @@ export class VideoScannerService {
 
 	findById(id: string): VideoFile | undefined {
 		return this.scan().find((v) => v.id === id);
+	}
+
+	findByPath(filePath: string): VideoFile | undefined {
+		const resolved = path.resolve(filePath);
+		// Security: ensure the file is within the configured video directory
+		const videoRoot = path.resolve(this.videoPath);
+		if (!resolved.startsWith(videoRoot + path.sep) && resolved !== videoRoot) {
+			return undefined;
+		}
+		return this.scan().find((v) => v.path === resolved);
 	}
 }

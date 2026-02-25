@@ -9,11 +9,23 @@ export function videoRoutes(): Router {
 	const scanner = container.get(VideoScannerService);
 	const hlsService = container.get(HlsSessionService);
 
+	// ── Find video by file path ────────────────────────────────────────────────
+
+	router.get('/by-path', (req, res) => {
+		const filePath = req.query['path'];
+		if (typeof filePath !== 'string' || !filePath) {
+			return void res.status(400).json({ error: 'Missing "path" query parameter' });
+		}
+		const video = scanner.findByPath(filePath);
+		if (!video) return void res.status(404).json({ error: 'Video not found' });
+		res.json(video);
+	});
+
 	// ── List all videos ────────────────────────────────────────────────────────
 
 	router.get('/', (_req, res) => {
 		const videos = scanner.scan();
-		res.json(videos.map(({ id, name, size, ext }) => ({ id, name, size, ext })));
+		res.json(videos);
 	});
 
 	// ── Stream info ─────────────────────────────────────────────────────────────
