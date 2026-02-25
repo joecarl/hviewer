@@ -164,19 +164,14 @@ export class HlsSessionService {
 		const streamMapParts = ['v:0', ...audioStreams.map((_, i) => `a:${i}`)];
 		args.push('-var_stream_map', streamMapParts.join(' '));
 
+		// prettier-ignore
 		// HLS options — start_number keeps segment indices absolute across restarts
 		args.push(
-			'-hls_time',
-			String(SEG_DURATION),
-			'-hls_list_size',
-			'0',
-			'-start_number',
-			String(startSegment),
-			'-hls_segment_filename',
-			`${sessionDir}/%v/seg%06d.ts`,
-			'-hls_flags',
-			'independent_segments',
-			`${sessionDir}/%v/stream.m3u8`
+			'-hls_time', String(SEG_DURATION),
+			'-hls_list_size', '0',
+			'-start_number', String(startSegment),
+			'-hls_segment_filename', `${sessionDir}/%v/seg%06d.ts`,
+			'-hls_flags', 'independent_segments',
 		);
 
 		console.log(`[FFmpeg] Starting session ${videoId} from seg ${startSegment}: ${videoPath}`);
