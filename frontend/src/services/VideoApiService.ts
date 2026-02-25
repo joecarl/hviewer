@@ -11,6 +11,15 @@ export interface ProbeStream {
 	codec_type: 'video' | 'audio' | 'subtitle' | string;
 	codec_name: string;
 	tags?: { language?: string; title?: string };
+	// video
+	width?: number;
+	height?: number;
+	r_frame_rate?: string;
+	pix_fmt?: string;
+	// audio
+	channels?: number;
+	channel_layout?: string;
+	sample_rate?: string;
 }
 
 export interface VideoDetails {
@@ -18,6 +27,7 @@ export interface VideoDetails {
 	name: string;
 	size: number;
 	streams: ProbeStream[];
+	duration: number; // seconds
 }
 
 export class VideoApiService {

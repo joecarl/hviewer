@@ -2,7 +2,18 @@ import Hls from 'hls.js';
 import { component, onUnmount, signal } from 'chispa';
 import { services } from '../../services/container/ServiceContainer';
 import { VideoApiService, type ProbeStream } from '../../services/VideoApiService';
+import { LocalPrefsService, PREF_KEYS } from '../../services/LocalPrefsService';
+import { fbytes, fDuration } from '../../utils/formats';
 import tpl from './PlayerView.html';
+
+function parseFps(rate?: string): string {
+	if (!rate) return '';
+	const [num, den] = rate.split('/').map(Number);
+	if (!num || !den) return '';
+	const fps = num / den;
+	const rounded = Math.round(fps * 100) / 100;
+	return `${rounded % 1 === 0 ? rounded : rounded.toFixed(2)}fps`;
+}
 
 export interface PlayerProps {
 	videoId: string;
@@ -11,6 +22,7 @@ export interface PlayerProps {
 
 export const PlayerView = component<PlayerProps>(({ videoId, onBack }) => {
 	const api = services.get(VideoApiService);
+	const prefs = services.get(LocalPrefsService);
 
 	// ── State ────────────────────────────────────────────────────────────────
 	const title = signal('Loading…');
@@ -19,6 +31,12 @@ export const PlayerView = component<PlayerProps>(({ videoId, onBack }) => {
 	const audioLoading = signal(false);
 	const subtitleList = signal<{ localIdx: number; name: string }[]>([]);
 	const currentSub = signal(-1);
+
+	// ── Info bar state ────────────────────────────────────────────────────────
+	const infoVisible = signal(prefs.get(PREF_KEYS.INFO_VISIBLE, false));
+	const infoVideoText = signal('');
+	const infoAudioText = signal('');
+	const infoDurationText = signal('');
 
 	let hls: Hls | null = null;
 	let videoEl: HTMLVideoElement | null = null;
@@ -122,6 +140,38 @@ export const PlayerView = component<PlayerProps>(({ videoId, onBack }) => {
 				name: s.tags?.title ?? s.tags?.language ?? `Track ${localIdx + 1}`,
 			}));
 		subtitleList.set(subs);
+
+		// ── Compute info bar text ─────────────────────────────────────────────
+		const vStream = details.streams.find((s) => s.codec_type === 'video');
+		const aStreams = details.streams.filter((s) => s.codec_type === 'audio');
+
+		if (vStream) {
+			const codec = vStream.codec_name.toUpperCase();
+			const res = vStream.width && vStream.height ? `${vStream.width}×${vStream.height}` : '';
+			const fps = parseFps(vStream.r_frame_rate);
+			const copyable = vStream.codec_name === 'h264' || vStream.codec_name === 'hevc' || vStream.codec_name === 'h265';
+			const badge = copyable ? ' <span class="hv-badge hv-badge--copy">copy</span>' : ' <span class="hv-badge hv-badge--transcode">→ libx264</span>';
+			infoVideoText.set(`${codec}${res ? ' · ' + res : ''}${fps ? ' · ' + fps : ''}${badge}`);
+		}
+
+		if (aStreams.length) {
+			const parts = aStreams.map((s) => {
+				const codec = s.codec_name.toUpperCase();
+				const ch = s.channels ?? 2;
+				const chLabel = ch > 2 ? `${ch}ch` : 'stereo';
+				return `${codec} ${chLabel}`;
+			});
+			// Collapse duplicates: "AAC stereo ×2" instead of listing each
+			const collapsed: string[] = [];
+			const counts = new Map<string, number>();
+			for (const p of parts) counts.set(p, (counts.get(p) ?? 0) + 1);
+			for (const [label, n] of counts) collapsed.push(n > 1 ? `${label} ×${n}` : label);
+			infoAudioText.set(collapsed.join(', ') + ' <span class="hv-badge hv-badge--transcode">→ AAC stereo</span>');
+		}
+
+		if (details.duration) {
+			infoDurationText.set(fDuration(details.duration) + ' · ' + fbytes(details.size));
+		}
 	});
 
 	// ── Cleanup ───────────────────────────────────────────────────────────────
@@ -140,6 +190,31 @@ export const PlayerView = component<PlayerProps>(({ videoId, onBack }) => {
 
 		playerTitle: {
 			inner: () => title.get(),
+		},
+
+		infoToggleBtn: {
+			onclick: () => {
+				const next = !infoVisible.get();
+				infoVisible.set(next);
+				prefs.set(PREF_KEYS.INFO_VISIBLE, next);
+			},
+			classes: { 'is-active': () => infoVisible.get() },
+		},
+
+		infoBar: {
+			classes: { hidden: () => !infoVisible.get() },
+		},
+
+		infoVideo: {
+			innerHTML: () => infoVideoText.get() || '…',
+		},
+
+		infoAudio: {
+			innerHTML: () => infoAudioText.get() || '',
+		},
+
+		infoDuration: {
+			innerHTML: () => infoDurationText.get() || '',
 		},
 
 		videoEl: {

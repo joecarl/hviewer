@@ -36,7 +36,8 @@ export function videoRoutes(): Router {
 
 		try {
 			const probe = await hlsService.probe(video.path);
-			res.json({ videoId: video.id, name: video.name, size: video.size, streams: probe.streams });
+			const duration = parseFloat(probe.format.duration) || 0;
+			res.json({ videoId: video.id, name: video.name, size: video.size, streams: probe.streams, duration });
 		} catch (err) {
 			res.status(500).json({ error: (err as Error).message });
 		}
@@ -74,12 +75,10 @@ export function videoRoutes(): Router {
 				return void res.status(400).json({ error: 'Invalid variant name' });
 			}
 
-			const playlistPath = path.join(session.sessionDir, req.params.variant, 'stream.m3u8');
-			await hlsService.waitForFile(playlistPath, 30_000);
-
+			const variantIdx = parseInt(req.params.variant, 10);
 			res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
 			res.setHeader('Cache-Control', 'no-cache');
-			res.sendFile(playlistPath);
+			res.send(hlsService.buildVariantPlaylist(session, variantIdx, req.params.id));
 		} catch (err) {
 			res.status(500).json({ error: (err as Error).message });
 		}
@@ -92,16 +91,18 @@ export function videoRoutes(): Router {
 		if (!video) return void res.status(404).json({ error: 'Video not found' });
 
 		const segment = path.basename(req.params.segment);
-		if (!segment.endsWith('.ts') || !/^\d+$/.test(req.params.variant)) {
+		if (!segment.startsWith('seg') || !segment.endsWith('.ts') || !/^\d+$/.test(req.params.variant)) {
 			return void res.status(400).json({ error: 'Bad request' });
 		}
+
+		// Parse absolute segment index from filename (e.g. seg000100.ts → 100)
+		const segIdx = parseInt(segment.slice(3, -3), 10);
 
 		try {
 			const session = await hlsService.getOrCreateSession(req.params.id, video.path);
 			session.lastAccess = Date.now();
 
-			const segPath = path.join(session.sessionDir, req.params.variant, segment);
-			await hlsService.waitForFile(segPath, 30_000);
+			const segPath = await hlsService.ensureSegmentAvailable(session, req.params.id, req.params.variant, segIdx);
 
 			res.setHeader('Content-Type', 'video/MP2T');
 			res.sendFile(segPath);
