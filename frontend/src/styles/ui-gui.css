@@ -1,0 +1,47 @@
+.ui-btn {
+	--ui-btn-padding: 3px 12px;
+	background: var(--ui-btn-bg);
+	border: var(--ui-btn-border);
+	border-color: var(--ui-btn-border-color);
+	border-radius: var(--ui-btn-radius);
+	padding: var(--ui-btn-padding);
+	font-size: 11px;
+	font-family: var(--ui-font);
+	cursor: pointer;
+	box-shadow: var(--ui-btn-shadow);
+	min-width: 75px;
+	color: var(--ui-text);
+	text-align: center;
+	outline: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 4px;
+	vertical-align: middle;
+	position: relative;
+	height: 23px;
+}
+
+.ui-btn:not(:disabled):hover {
+	background: var(--ui-btn-hover-bg, var(--ui-btn-bg));
+	border-color: var(--ui-btn-hover-border-color, var(--ui-btn-border-color));
+	box-shadow: var(--ui-btn-hover-shadow, var(--ui-btn-shadow));
+}
+
+.ui-btn:not(:disabled):active {
+	background: var(--ui-btn-active-bg, var(--ui-btn-bg));
+	box-shadow: var(--ui-btn-active-shadow, var(--ui-btn-shadow));
+	border: var(--ui-btn-active-border, var(--ui-btn-border));
+	border-color: var(--ui-btn-active-border-color, var(--ui-btn-border-color));
+	top: var(--ui-btn-active-top, 0);
+	left: var(--ui-btn-active-left, 0);
+}
+
+.ui-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+	background: var(--ui-face);
+	border-color: var(--ui-shadow);
+	box-shadow: none;
+	color: var(--ui-shadow);
+}

@@ -1,0 +1,32 @@
+<div class="hv-layout" data-cb="root">
+
+	<!-- ── Left panel: video list ─────────────────────────── -->
+	<aside class="hv-sidebar">
+		<div class="hv-sidebar-header">
+			<span class="hv-app-title">hViewer</span>
+			<span class="hv-video-count" data-cb="videoCount"></span>
+		</div>
+		<div class="hv-video-list" data-cb="videoList">
+			<!-- status message template -->
+			<div class="hv-list-msg" data-cb="listMessage"></div>
+			<!-- template item -->
+			<div class="hv-video-item" data-cb="videoItem">
+				<span class="hv-video-ext" data-cb="videoItemExt"></span>
+				<div class="hv-video-item-info">
+					<div class="hv-video-item-name" data-cb="videoItemName"></div>
+					<div class="hv-video-item-size" data-cb="videoItemSize"></div>
+				</div>
+			</div>
+		</div>
+	</aside>
+
+	<!-- ── Right panel: player ────────────────────────────── -->
+	<main class="hv-main">
+		<div class="hv-placeholder" data-cb="placeholder">
+			<div class="hv-placeholder-icon">▶</div>
+			<div>Select a video</div>
+		</div>
+		<div class="hv-player-wrap" data-cb="playerWrap"></div>
+	</main>
+
+</div>

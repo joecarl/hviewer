@@ -1,0 +1,23 @@
+services:
+    hviewer:
+        image: ghcr.io/joecarl/hviewer:latest
+        container_name: hviewer
+        restart: unless-stopped
+
+        ports:
+            - '8945:8945'
+
+        volumes:
+            # Mount your video library (read-only is fine)
+            - /path/to/your/videos:/videos:ro
+
+        environment:
+            # Path inside the container where videos are mounted
+            VIDEO_PATH: /videos
+            # Port the backend listens on (default: 8945)
+            PORT: 8945
+
+            # Optional: override ffmpeg/ffprobe binary paths
+            # (defaults to /usr/local/bin/ffmpeg and /usr/local/bin/ffprobe)
+            # FFMPEG_PATH: /usr/local/bin/ffmpeg
+            # FFPROBE_PATH: /usr/local/bin/ffprobe

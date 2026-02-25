@@ -1,0 +1,43 @@
+// Types returned by the backend
+export interface VideoInfo {
+	id: string;
+	name: string;
+	size: number;
+	ext: string;
+}
+
+export interface ProbeStream {
+	index: number;
+	codec_type: 'video' | 'audio' | 'subtitle' | string;
+	codec_name: string;
+	tags?: { language?: string; title?: string };
+}
+
+export interface VideoDetails {
+	videoId: string;
+	name: string;
+	size: number;
+	streams: ProbeStream[];
+}
+
+export class VideoApiService {
+	async getVideos(): Promise<VideoInfo[]> {
+		const res = await fetch('/api/videos');
+		if (!res.ok) throw new Error(`Failed to list videos: ${res.status}`);
+		return res.json();
+	}
+
+	async getDetails(videoId: string): Promise<VideoDetails> {
+		const res = await fetch(`/api/videos/${videoId}/info`);
+		if (!res.ok) throw new Error(`Failed to get video info: ${res.status}`);
+		return res.json();
+	}
+
+	getMasterPlaylistUrl(videoId: string): string {
+		return `/api/videos/${videoId}/hls/master.m3u8`;
+	}
+
+	getSubtitleUrl(videoId: string, streamIndex: number): string {
+		return `/api/videos/${videoId}/subs/${streamIndex}.vtt`;
+	}
+}
