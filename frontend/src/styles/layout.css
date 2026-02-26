@@ -23,6 +23,11 @@
 	flex-shrink: 0;
 }
 
+.hv-app-version {
+	font-size: 11px;
+	color: var(--ui-text-muted);
+}
+
 .hv-gh-link {
 	display: inline-flex;
 	align-items: center;

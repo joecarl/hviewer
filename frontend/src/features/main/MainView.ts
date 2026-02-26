@@ -66,6 +66,10 @@ export const MainView = component(() => {
 			},
 		},
 
+		appVersion: {
+			inner: 'v' + __APP_MANIFEST__.version,
+		},
+
 		// Video count badge
 		videoCount: {
 			inner: () => {
