@@ -52,7 +52,19 @@ export const PlayerView = component<PlayerProps>(({ videoId, onBack }) => {
 		const masterUrl = api.getMasterPlaylistUrl(videoId);
 
 		if (Hls.isSupported()) {
-			hls = new Hls({ enableWorker: true });
+			hls = new Hls({
+				enableWorker: true,
+				// Our server may take up to 60 s to produce a segment (FFmpeg restart + encode).
+				// hls.js default is 20 s — raise it so it doesn't give up before we're done.
+				fragLoadingTimeOut: 60_000,
+				manifestLoadingTimeOut: 30_000,
+				// Allow extra retries — transient 500s during a seek-restart are normal.
+				fragLoadingMaxRetry: 6,
+				fragLoadingRetryDelay: 500,
+				// Keep the look-ahead buffer short so hls.js doesn't flood the server
+				// with segment requests for positions we haven't transcoded yet.
+				maxMaxBufferLength: 30,
+			});
 			hls.loadSource(masterUrl);
 			hls.attachMedia(el);
 
@@ -85,8 +97,23 @@ export const PlayerView = component<PlayerProps>(({ videoId, onBack }) => {
 			});
 
 			hls.on(Hls.Events.ERROR, (_, data) => {
-				if (data.fatal) {
-					console.error('[HLS] Fatal error:', data);
+				console.warn('[HLS] Error:', data.type, data.details, data.fatal);
+				if (!data.fatal) return;
+
+				// Without recovery, a fatal error leaves hls.js dead and the video element
+				// frozen with whatever was buffered (appears as "seekbar shrinks to ~20 s").
+				if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+					console.warn('[HLS] Recovering from fatal media error…');
+					hls!.recoverMediaError();
+				} else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+					// Fatal network error (e.g. segment 500 after all retries).
+					// Reload the source so the next seek/play starts fresh.
+					console.warn('[HLS] Fatal network error — reloading source…');
+					const currentTime = el.currentTime;
+					hls!.loadSource(masterUrl);
+					hls!.startLoad(currentTime);
+				} else {
+					console.error('[HLS] Unrecoverable fatal error:', data);
 				}
 			});
 		} else if (el.canPlayType('application/vnd.apple.mpegurl')) {

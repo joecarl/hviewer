@@ -46,6 +46,7 @@ export interface HlsSession {
 	startSegment: number; // segment index FFmpeg started from
 	totalDuration: number; // seconds (from ffprobe format)
 	totalSegments: number; // ceil(totalDuration / SEG_DURATION)
+	restartPromise: Promise<void> | null; // serializes seek-restarts
 }
 
 // ── Service ───────────────────────────────────────────────────────────────────
@@ -116,6 +117,7 @@ export class HlsSessionService {
 			startSegment: 0,
 			totalDuration,
 			totalSegments,
+			restartPromise: null,
 		};
 
 		this.sessions.set(videoId, session);
@@ -166,10 +168,13 @@ export class HlsSessionService {
 
 		// prettier-ignore
 		// HLS options — start_number keeps segment indices absolute across restarts
+		// output_ts_offset aligns the internal MPEG-TS timestamps with the HLS timeline
+		// so hls.js sees a continuous stream instead of timestamps jumping back to 0.
 		args.push(
 			'-hls_time', String(SEG_DURATION),
 			'-hls_list_size', '0',
 			'-start_number', String(startSegment),
+			'-output_ts_offset', String(startSegment * SEG_DURATION),
 			'-hls_segment_filename', `${sessionDir}/%v/seg%06d.ts`,
 			'-hls_flags', 'independent_segments',
 			`${sessionDir}/%v/stream.m3u8`
@@ -227,20 +232,15 @@ export class HlsSessionService {
 	// #EXT-X-GAP entry so hls.js skips it and jumps to available content.
 
 	buildVariantPlaylist(session: HlsSession, variantIdx: number, videoId: string): string {
-		const { totalDuration, totalSegments, startSegment } = session;
+		const { totalDuration, totalSegments } = session;
 		const base = `/api/videos/${videoId}/hls/${variantIdx}`;
 		const lines: string[] = ['#EXTM3U', '#EXT-X-VERSION:3', `#EXT-X-TARGETDURATION:${SEG_DURATION + 1}`, '#EXT-X-PLAYLIST-TYPE:VOD', ''];
 
-		if (startSegment > 0) {
-			// Represent the skipped range as a single gap entry so hls.js knows the total duration
-			const gapDur = (startSegment * SEG_DURATION).toFixed(6);
-			lines.push('#EXT-X-GAP');
-			lines.push(`#EXTINF:${gapDur},`);
-			lines.push(`${base}/seg000000.ts`); // URL won't be fetched for a GAP
-			lines.push('#EXT-X-DISCONTINUITY');
-		}
-
-		for (let i = startSegment; i < totalSegments; i++) {
+		// Always list the full timeline from segment 0 so the seekbar covers the whole
+		// video and page refresh always starts from the beginning.
+		// Segments before startSegment don't exist on disk; ensureSegmentAvailable will
+		// restart FFmpeg from the right position when hls.js requests them.
+		for (let i = 0; i < totalSegments; i++) {
 			const isLast = i === totalSegments - 1;
 			const dur = isLast ? Math.max(totalDuration - i * SEG_DURATION, 0).toFixed(6) : SEG_DURATION.toFixed(6);
 			lines.push(`#EXTINF:${dur},`);
@@ -269,12 +269,49 @@ export class HlsSessionService {
 		const segPath = path.join(session.sessionDir, variant, `seg${String(segIdx).padStart(6, '0')}.ts`);
 		if (existsSync(segPath)) return segPath;
 
+		// If a restart is already in progress (triggered by a concurrent request),
+		// wait for it to finish before deciding whether we need another one.
+		if (session.restartPromise) {
+			try {
+				await session.restartPromise;
+			} catch {
+				/* will retry below */
+			}
+			if (existsSync(segPath)) return segPath;
+		}
+
 		const lastProduced = this.getLastProducedSegment(session.sessionDir, variant);
 
-		// If the requested segment is far beyond current progress, restart from it
-		if (segIdx > lastProduced + SEEK_AHEAD_THRESHOLD) {
-			console.log(`[Seek] Restarting from seg ${segIdx} (last=${lastProduced}) for ${videoId}`);
-			await this.restartFfmpegFrom(session, videoId, segIdx);
+		// Use max(lastProduced, startSegment - 1) as the progress reference so that
+		// right after a restart (lastProduced = -1, files cleared) we don't immediately
+		// think every segment is "too far ahead" and trigger another restart.
+		const progressRef = Math.max(lastProduced, session.startSegment - 1);
+
+		// Only restart if FFmpeg exited with a numeric error code (not signal, not still running).
+		// exit=0 means it finished normally — all segments are already on disk.
+		// Signal exits (SIGTERM by us) always happen inside restartFfmpegFrom with restartPromise set.
+		const processErrored = session.process !== null && session.process.exitCode !== null && session.process.exitCode !== 0;
+
+		// Restart if:
+		//   a) backward seek past where FFmpeg started (it will never produce this segment), OR
+		//   b) forward leap far beyond current progress (would take too long to reach), OR
+		//   c) FFmpeg died with an error — segment will never appear, fail fast
+		const needsRestart = segIdx < session.startSegment || segIdx > progressRef + SEEK_AHEAD_THRESHOLD || processErrored;
+
+		if (needsRestart && !session.restartPromise) {
+			console.log(`[Seek] Restarting from seg ${segIdx} (last=${lastProduced}, start=${session.startSegment}, errored=${processErrored}) for ${videoId}`);
+			session.restartPromise = this.restartFfmpegFrom(session, videoId, segIdx).finally(() => {
+				session.restartPromise = null;
+			});
+		}
+
+		if (session.restartPromise) {
+			try {
+				await session.restartPromise;
+			} catch {
+				/* restart failed; waitForFile below will surface the error */
+			}
+			if (existsSync(segPath)) return segPath;
 		}
 
 		await this.waitForFile(segPath, 60_000);
@@ -282,8 +319,21 @@ export class HlsSessionService {
 	}
 
 	private async restartFfmpegFrom(session: HlsSession, videoId: string, startSegment: number): Promise<void> {
-		// Kill current FFmpeg process
-		session.process?.kill('SIGTERM');
+		// Kill current FFmpeg and wait for it to actually exit before touching files.
+		// SIGTERM is asynchronous — if we delete immediately FFmpeg may still write
+		// one final segment that then becomes a stale orphan and corrupts lastProduced.
+		if (session.process && session.process.exitCode === null) {
+			const dyingProc = session.process; // capture reference — session.process will be overwritten later
+			await new Promise<void>((resolve) => {
+				dyingProc.once('close', () => resolve());
+				dyingProc.kill('SIGTERM');
+				// Safety timeout: force-kill after 5 s if still alive
+				setTimeout(() => {
+					dyingProc.kill('SIGKILL');
+					resolve();
+				}, 5_000);
+			});
+		}
 		session.process = null;
 
 		// Remove old segment files so the new run starts clean
