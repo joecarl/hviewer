@@ -1,9 +1,31 @@
 // Types returned by the backend
 export interface VideoInfo {
-	id: string;
+	// path is the unique identity — no hash id needed
 	name: string;
+	path: string;
 	size: number;
 	ext: string;
+}
+
+export interface DirSubdir {
+	type: 'dir';
+	name: string;
+	path: string;
+}
+
+export interface GenericFileInfo {
+	type: 'file';
+	name: string;
+	path: string;
+	ext: string;
+}
+
+export type DirEntry = DirSubdir | (VideoInfo & { type: 'video' }) | GenericFileInfo;
+
+export interface DirBrowseResult {
+	rootPath: string;
+	dir: string;
+	entries: DirEntry[];
 }
 
 export interface ProbeStream {
@@ -23,7 +45,6 @@ export interface ProbeStream {
 }
 
 export interface VideoDetails {
-	videoId: string;
 	name: string;
 	size: number;
 	streams: ProbeStream[];
@@ -37,24 +58,26 @@ export class VideoApiService extends BaseApiService {
 		super('/api/videos');
 	}
 
-	async getVideos(): Promise<VideoInfo[]> {
-		return this.request<VideoInfo[]>('');
+	// Encode an absolute server path as a base64url session ID (mirrors backend)
+	static pathToSessionId(filePath: string): string {
+		return btoa(filePath).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 	}
 
-	async getDetails(videoId: string): Promise<VideoDetails> {
-		return this.request<VideoDetails>(`/${videoId}/info`);
+	async getDetails(filePath: string): Promise<VideoDetails> {
+		return this.request<VideoDetails>(`/info?path=${encodeURIComponent(filePath)}`);
 	}
 
 	// Raw URLs — consumed by hls.js directly, must not go through the fetch wrapper
-	getMasterPlaylistUrl(videoId: string): string {
-		return `${this.baseUrl}/${videoId}/hls/master.m3u8`;
+	getMasterPlaylistUrl(filePath: string): string {
+		return `${this.baseUrl}/${VideoApiService.pathToSessionId(filePath)}/hls/master.m3u8`;
 	}
 
-	getSubtitleUrl(videoId: string, streamIndex: number): string {
-		return `${this.baseUrl}/${videoId}/subs/${streamIndex}.vtt`;
+	getSubtitleUrl(filePath: string, streamIndex: number): string {
+		return `${this.baseUrl}/${VideoApiService.pathToSessionId(filePath)}/subs/${streamIndex}.vtt`;
 	}
 
-	async getVideoByPath(filePath: string): Promise<VideoInfo> {
-		return this.request<VideoInfo>(`/by-path?path=${encodeURIComponent(filePath)}`);
+	async browseDir(dir?: string): Promise<DirBrowseResult> {
+		const query = dir ? `?dir=${encodeURIComponent(dir)}` : '';
+		return this.request<DirBrowseResult>(`/browse${query}`);
 	}
 }

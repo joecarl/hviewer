@@ -16,11 +16,11 @@ function parseFps(rate?: string): string {
 }
 
 export interface PlayerProps {
-	videoId: string;
+	videoPath: string;
 	onBack: () => void;
 }
 
-export const PlayerView = component<PlayerProps>(({ videoId, onBack }) => {
+export const PlayerView = component<PlayerProps>(({ videoPath, onBack }) => {
 	const api = services.get(VideoApiService);
 	const prefs = services.get(LocalPrefsService);
 
@@ -49,7 +49,7 @@ export const PlayerView = component<PlayerProps>(({ videoId, onBack }) => {
 			hls = null;
 		}
 
-		const masterUrl = api.getMasterPlaylistUrl(videoId);
+		const masterUrl = api.getMasterPlaylistUrl(videoPath);
 
 		if (Hls.isSupported()) {
 			hls = new Hls({
@@ -140,7 +140,7 @@ export const PlayerView = component<PlayerProps>(({ videoId, onBack }) => {
 		const track = document.createElement('track');
 		track.setAttribute('data-hv', '');
 		track.kind = 'subtitles';
-		track.src = api.getSubtitleUrl(videoId, localIdx);
+				track.src = api.getSubtitleUrl(videoPath, localIdx);
 		track.default = true;
 		videoEl.appendChild(track);
 
@@ -157,7 +157,7 @@ export const PlayerView = component<PlayerProps>(({ videoId, onBack }) => {
 	};
 
 	// ── Load video details ────────────────────────────────────────────────────
-	api.getDetails(videoId).then((details) => {
+	api.getDetails(videoPath).then((details) => {
 		title.set(details.name);
 
 		const subs = details.streams

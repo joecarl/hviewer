@@ -4,129 +4,120 @@ import { container } from '../services/container/ServiceContainer';
 import { VideoScannerService } from '../services/VideoScannerService';
 import { HlsSessionService } from '../services/HlsSessionService';
 
+// ── Session ID helpers ────────────────────────────────────────────────────────
+// The session ID is a base64url-encoded absolute file path.
+// It serves as a stable, scanless key for HLS sessions and temp directories.
+
+function sessionIdToPath(sessionId: string): string {
+	const b64 = sessionId.replace(/-/g, '+').replace(/_/g, '/');
+	const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+	return Buffer.from(padded, 'base64').toString('latin1');
+}
+
 export function videoRoutes(): Router {
 	const router = Router();
 	const scanner = container.get(VideoScannerService);
 	const hlsService = container.get(HlsSessionService);
 
-	// ── Find video by file path ────────────────────────────────────────────────
+	// ── Browse a directory (one level, lazy) ──────────────────────────────────
 
-	router.get('/by-path', (req, res) => {
+	router.get('/browse', (req, res) => {
+		const dir = typeof req.query['dir'] === 'string' ? req.query['dir'] : undefined;
+		try {
+			const result = scanner.listDir(dir);
+			res.json(result);
+		} catch (err) {
+				res.status(403).json({ error: (err as Error).message });
+		}
+	});
+
+	// ── Video stream info ──────────────────────────────────────────────────────
+
+	router.get('/info', async (req, res) => {
 		const filePath = req.query['path'];
 		if (typeof filePath !== 'string' || !filePath) {
 			return void res.status(400).json({ error: 'Missing "path" query parameter' });
 		}
-		const video = scanner.findByPath(filePath);
-		if (!video) return void res.status(404).json({ error: 'Video not found' });
-		res.json(video);
-	});
-
-	// ── List all videos ────────────────────────────────────────────────────────
-
-	router.get('/', (_req, res) => {
-		const videos = scanner.scan();
-		res.json(videos);
-	});
-
-	// ── Stream info ─────────────────────────────────────────────────────────────
-
-	router.get('/:id/info', async (req, res) => {
-		const video = scanner.findById(req.params.id);
-		if (!video) return void res.status(404).json({ error: 'Video not found' });
-
 		try {
+			const video = scanner.resolveVideoPath(filePath);
 			const probe = await hlsService.probe(video.path);
 			const duration = parseFloat(probe.format.duration) || 0;
-			res.json({ videoId: video.id, name: video.name, size: video.size, streams: probe.streams, duration });
+			res.json({ name: video.name, size: video.size, streams: probe.streams, duration });
 		} catch (err) {
-			res.status(500).json({ error: (err as Error).message });
+				res.status(500).json({ error: (err as Error).message });
 		}
 	});
 
-	// ── HLS master playlist ─────────────────────────────────────────────────────
+	// ── HLS master playlist ────────────────────────────────────────────────────
 
-	router.get('/:id/hls/master.m3u8', async (req, res) => {
-		const video = scanner.findById(req.params.id);
-		if (!video) return void res.status(404).json({ error: 'Video not found' });
-
+	router.get('/:sessionId/hls/master.m3u8', async (req, res) => {
+		const { sessionId } = req.params;
 		try {
-			const session = await hlsService.getOrCreateSession(req.params.id, video.path);
+			const video = scanner.resolveVideoPath(sessionIdToPath(sessionId));
+			const session = await hlsService.getOrCreateSession(sessionId, video.path);
 			res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
 			res.setHeader('Cache-Control', 'no-cache');
-			res.send(hlsService.buildMasterPlaylist(session, req.params.id));
+			res.send(hlsService.buildMasterPlaylist(session, sessionId));
 		} catch (err) {
-			res.status(500).json({ error: (err as Error).message });
+				res.status(500).json({ error: (err as Error).message });
 		}
 	});
 
-	// ── HLS variant playlists — /:variant/stream.m3u8
-	// variant "0" = video, "1", "2", ... = audio tracks  ──────────────────────
+	// ── HLS variant playlists ─────────────────────────────────────────────────
+	// variant "0" = video, "1", "2", ... = audio tracks
 
-	router.get('/:id/hls/:variant/stream.m3u8', async (req, res) => {
-		const video = scanner.findById(req.params.id);
-		if (!video) return void res.status(404).json({ error: 'Video not found' });
-
+	router.get('/:sessionId/hls/:variant/stream.m3u8', async (req, res) => {
+		const { sessionId } = req.params;
+		if (!/^\d+$/.test(req.params.variant)) {
+			return void res.status(400).json({ error: 'Invalid variant name' });
+		}
 		try {
-			const session = await hlsService.getOrCreateSession(req.params.id, video.path);
+			const video = scanner.resolveVideoPath(sessionIdToPath(sessionId));
+			const session = await hlsService.getOrCreateSession(sessionId, video.path);
 			session.lastAccess = Date.now();
-
-			// variant dirs are named "0", "1", "2" etc. (FFmpeg %v pattern)
-			if (!/^\d+$/.test(req.params.variant)) {
-				return void res.status(400).json({ error: 'Invalid variant name' });
-			}
-
 			const variantIdx = parseInt(req.params.variant, 10);
 			res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
 			res.setHeader('Cache-Control', 'no-cache');
-			res.send(hlsService.buildVariantPlaylist(session, variantIdx, req.params.id));
+			res.send(hlsService.buildVariantPlaylist(session, variantIdx, sessionId));
 		} catch (err) {
-			res.status(500).json({ error: (err as Error).message });
+				res.status(500).json({ error: (err as Error).message });
 		}
 	});
 
-	// ── HLS segments ────────────────────────────────────────────────────────────
+	// ── HLS segments ──────────────────────────────────────────────────────────
 
-	router.get('/:id/hls/:variant/:segment', async (req, res) => {
-		const video = scanner.findById(req.params.id);
-		if (!video) return void res.status(404).json({ error: 'Video not found' });
-
+	router.get('/:sessionId/hls/:variant/:segment', async (req, res) => {
+		const { sessionId } = req.params;
 		const segment = path.basename(req.params.segment);
 		if (!segment.startsWith('seg') || !segment.endsWith('.ts') || !/^\d+$/.test(req.params.variant)) {
 			return void res.status(400).json({ error: 'Bad request' });
 		}
-
-		// Parse absolute segment index from filename (e.g. seg000100.ts → 100)
 		const segIdx = parseInt(segment.slice(3, -3), 10);
-
 		try {
-			const session = await hlsService.getOrCreateSession(req.params.id, video.path);
+			const video = scanner.resolveVideoPath(sessionIdToPath(sessionId));
+			const session = await hlsService.getOrCreateSession(sessionId, video.path);
 			session.lastAccess = Date.now();
-
-			const segPath = await hlsService.ensureSegmentAvailable(session, req.params.id, req.params.variant, segIdx);
-
+			const segPath = await hlsService.ensureSegmentAvailable(session, sessionId, req.params.variant, segIdx);
 			res.setHeader('Content-Type', 'video/MP2T');
 			res.sendFile(segPath);
 		} catch (err) {
-			res.status(500).json({ error: (err as Error).message });
+				res.status(500).json({ error: (err as Error).message });
 		}
 	});
 
-	// ── Subtitle tracks as WebVTT ────────────────────────────────────────────────
+	// ── Subtitle tracks as WebVTT ──────────────────────────────────────────────
 
-	router.get('/:id/subs/:idx.vtt', async (req, res) => {
-		const video = scanner.findById(req.params.id);
-		if (!video) return void res.status(404).json({ error: 'Video not found' });
-
+	router.get('/:sessionId/subs/:idx.vtt', async (req, res) => {
 		const idx = parseInt(req.params.idx, 10);
 		if (isNaN(idx) || idx < 0) return void res.status(400).json({ error: 'Invalid subtitle index' });
-
 		try {
+			const video = scanner.resolveVideoPath(sessionIdToPath(req.params.sessionId));
 			const vtt = await hlsService.extractSubtitle(video.path, idx);
 			res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
 			res.setHeader('Cache-Control', 'public, max-age=3600');
 			res.send(vtt);
 		} catch (err) {
-			res.status(500).json({ error: (err as Error).message });
+				res.status(500).json({ error: (err as Error).message });
 		}
 	});
 

@@ -11,6 +11,9 @@
 	flex-shrink: 0;
 	background: var(--ui-window);
 	border-right: 1px solid var(--ui-border);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
 }
 
 .hv-sidebar-header {
@@ -62,25 +65,74 @@
 	border-radius: 10px;
 }
 
-.hv-video-list {
+/* ── Directory tree scroll area ────────────────────────────── */
+.hv-tree-scroll {
 	flex: 1;
 	overflow-y: auto;
 	padding: 6px 0;
 }
 
-/* ── Video list item ─────────────────────────────────────────── */
-.hv-video-item {
+/* ── Tree nodes ──────────────────────────────────────────────── */
+.hv-tree-row {
 	display: flex;
 	align-items: center;
-	gap: 10px;
-	padding: 8px 14px;
+	gap: 6px;
+	padding-top: 6px;
+	padding-bottom: 6px;
+	padding-right: 10px;
 	cursor: pointer;
-	border-left: 2px solid transparent;
+	user-select: none;
 	transition: background 0.1s;
 
 	&:hover {
 		background: rgba(255, 255, 255, 0.05);
 	}
+}
+
+.hv-tree-dir-row {
+	font-size: 12px;
+	color: var(--ui-text-muted);
+	font-weight: 600;
+	letter-spacing: 0.2px;
+}
+
+.hv-tree-icon {
+	flex-shrink: 0;
+	width: 14px;
+	height: 14px;
+	opacity: 0.7;
+	transition: opacity 0.1s;
+
+	.hv-tree-dir-row:hover & {
+		opacity: 1;
+	}
+}
+
+.hv-tree-icon--file {
+	opacity: 0.35;
+}
+
+/* ── Generic file node ───────────────────────────────────────── */
+.hv-tree-file {
+	cursor: default;
+
+	& .hv-tree-label {
+		color: var(--ui-text-muted);
+		font-size: 12px;
+	}
+}
+
+.hv-tree-label {
+	flex: 1;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* ── Video leaf node ─────────────────────────────────────────── */
+.hv-tree-video {
+	border-left: 2px solid transparent;
 
 	&.is-selected {
 		background: rgba(124, 58, 237, 0.15);
@@ -106,33 +158,21 @@
 	letter-spacing: 0.5px;
 }
 
-.hv-video-item-info {
-	flex: 1;
-	min-width: 0;
-}
-
-.hv-video-item-name {
-	font-size: 12px;
-	font-weight: 500;
-	color: var(--ui-text);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-.hv-video-item-size {
+.hv-tree-size {
+	flex-shrink: 0;
 	font-size: 10px;
 	color: var(--ui-text-muted);
-	margin-top: 1px;
+	margin-left: auto;
+	padding-right: 4px;
 }
 
-.hv-list-msg {
-	padding: 20px 14px;
+.hv-tree-msg {
 	color: var(--ui-text-muted);
-	font-size: 12px;
-	line-height: 1.6;
+	font-size: 11px;
+	padding-top: 3px;
+	padding-bottom: 3px;
 
-	&.hv-error {
+	&.hv-tree-error {
 		color: #f87171;
 	}
 }
@@ -168,45 +208,14 @@
 
 	.hv-sidebar {
 		width: 100%;
-		height: 180px;
+		height: 220px;
 		border-right: none;
 		border-bottom: 1px solid var(--ui-border);
 	}
 
-	.hv-video-list {
-		overflow-x: auto;
-		overflow-y: hidden;
-		display: flex;
-		flex-direction: row;
-		padding: 6px;
-		gap: 4px;
-	}
-
-	.hv-video-item {
-		flex-shrink: 0;
-		width: 160px;
-		flex-direction: column;
-		align-items: flex-start;
-		padding: 8px;
-		border-left: none;
-		border-bottom: 2px solid transparent;
-		border-radius: 6px;
-		background: #2a2a2a;
-
-		&.is-selected {
-			background: rgba(124, 58, 237, 0.2);
-			border-bottom-color: var(--accent);
-		}
-
-		& .hv-video-item-name {
-			white-space: normal;
-			word-break: break-word;
-			display: -webkit-box;
-			line-clamp: 2;
-			-webkit-line-clamp: 2;
-			-webkit-box-orient: vertical;
-			overflow: hidden;
-		}
+	.hv-tree-scroll {
+		overflow-x: hidden;
+		overflow-y: auto;
 	}
 
 	.hv-main {

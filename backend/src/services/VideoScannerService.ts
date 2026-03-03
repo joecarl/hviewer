@@ -1,15 +1,34 @@
 import { readdirSync, statSync } from 'fs';
 import path from 'path';
-import crypto from 'crypto';
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.ts', '.m2ts', '.mpg', '.mpeg', '.ogv', '.3gp']);
 
 export interface VideoFile {
-	id: string;
 	name: string;
 	path: string;
 	size: number;
 	ext: string;
+}
+
+export interface DirSubdir {
+	type: 'dir';
+	name: string;
+	path: string;
+}
+
+export interface GenericFile {
+	type: 'file';
+	name: string;
+	path: string;
+	ext: string;
+}
+
+export type DirEntry = DirSubdir | (VideoFile & { type: 'video' }) | GenericFile;
+
+export interface DirBrowseResult {
+	rootPath: string;
+	dir: string;
+	entries: DirEntry[];
 }
 
 export class VideoScannerService {
@@ -23,52 +42,67 @@ export class VideoScannerService {
 		return this.videoPath;
 	}
 
-	scan(): VideoFile[] {
-		const results: VideoFile[] = [];
-		try {
-			this.scanDir(this.videoPath, results);
-		} catch (err) {
-			console.warn(`Cannot scan directory ${this.videoPath}:`, (err as Error).message);
+	// Validate that filePath is inside the video root, stat it, return VideoFile.
+	// Throws if the path escapes the root or the file does not exist.
+	resolveVideoPath(filePath: string): VideoFile {
+		const videoRoot = path.resolve(this.videoPath);
+		const resolved = path.resolve(filePath);
+		if (resolved !== videoRoot && !resolved.startsWith(videoRoot + path.sep)) {
+			throw new Error('Access denied');
 		}
-		// Sort by name
-		results.sort((a, b) => a.name.localeCompare(b.name));
-		return results;
+		const ext = path.extname(resolved).toLowerCase();
+		if (!VIDEO_EXTENSIONS.has(ext)) {
+			throw new Error('Not a video file');
+		}
+		const stats = statSync(resolved);
+		return {
+			name: path.basename(resolved, ext),
+			path: resolved,
+			size: stats.size,
+			ext,
+		};
 	}
 
-	private scanDir(dir: string, results: VideoFile[]): void {
-		const entries = readdirSync(dir, { withFileTypes: true });
-		for (const entry of entries) {
-			const fullPath = path.join(dir, entry.name);
+	listDir(dirPath?: string): DirBrowseResult {
+		const videoRoot = path.resolve(this.videoPath);
+		const resolved = path.resolve(dirPath ?? videoRoot);
+
+		// Security: must be inside the video root
+		if (resolved !== videoRoot && !resolved.startsWith(videoRoot + path.sep)) {
+			throw new Error('Access denied');
+		}
+
+		const entries: DirEntry[] = [];
+		const rawEntries = readdirSync(resolved, { withFileTypes: true });
+
+		for (const entry of rawEntries) {
+			const fullPath = path.join(resolved, entry.name);
 			if (entry.isDirectory()) {
-				this.scanDir(fullPath, results);
+				entries.push({ type: 'dir', name: entry.name, path: fullPath });
 			} else if (entry.isFile()) {
 				const ext = path.extname(entry.name).toLowerCase();
 				if (VIDEO_EXTENSIONS.has(ext)) {
 					const stats = statSync(fullPath);
-					const id = crypto.createHash('sha256').update(fullPath).digest('hex');
-					results.push({
-						id,
+					entries.push({
+						type: 'video',
 						name: path.basename(entry.name, ext),
 						path: fullPath,
 						size: stats.size,
 						ext,
 					});
+				} else {
+					entries.push({ type: 'file', name: entry.name, path: fullPath, ext });
 				}
 			}
 		}
-	}
 
-	findById(id: string): VideoFile | undefined {
-		return this.scan().find((v) => v.id === id);
-	}
+		// Sort: dirs first, then files/videos alphabetically
+		entries.sort((a, b) => {
+			if (a.type === 'dir' && b.type !== 'dir') return -1;
+			if (a.type !== 'dir' && b.type === 'dir') return 1;
+			return a.name.localeCompare(b.name);
+		});
 
-	findByPath(filePath: string): VideoFile | undefined {
-		const resolved = path.resolve(filePath);
-		// Security: ensure the file is within the configured video directory
-		const videoRoot = path.resolve(this.videoPath);
-		if (!resolved.startsWith(videoRoot + path.sep) && resolved !== videoRoot) {
-			return undefined;
-		}
-		return this.scan().find((v) => v.path === resolved);
-	}
+	return { rootPath: videoRoot, dir: resolved, entries };
+}
 }

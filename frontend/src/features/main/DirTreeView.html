@@ -1,0 +1,29 @@
+<div class="hv-tree" data-cb="treeRoot">
+
+	<!-- ── Directory node template ───────────────────── -->
+	<div class="hv-tree-dir" data-cb="dirNode">
+		<div class="hv-tree-row hv-tree-dir-row" data-cb="dirRow">
+			<img class="hv-tree-icon" src="/assets/folder-closed.svg" alt="" data-cb="dirIconClosed">
+			<img class="hv-tree-icon" src="/assets/folder-open.svg" alt="" data-cb="dirIconOpen">
+			<span class="hv-tree-label" data-cb="dirLabel"></span>
+		</div>
+		<div class="hv-tree-children" data-cb="dirChildren"></div>
+	</div>
+
+	<!-- ── Video leaf node template ──────────────────── -->
+	<div class="hv-tree-row hv-tree-video" data-cb="videoNode">
+		<span class="hv-video-ext" data-cb="videoExt"></span>
+		<span class="hv-tree-label" data-cb="videoName"></span>
+		<span class="hv-tree-size" data-cb="videoSize"></span>
+	</div>
+
+	<!-- ── Generic file node template ───────────────── -->
+	<div class="hv-tree-row hv-tree-file" data-cb="fileNode">
+		<img class="hv-tree-icon hv-tree-icon--file" src="/assets/file.svg" alt="">
+		<span class="hv-tree-label" data-cb="fileName"></span>
+	</div>
+
+	<!-- ── Status / message template ─────────────────── -->
+	<div class="hv-tree-msg" data-cb="treeMsg"></div>
+
+</div>
