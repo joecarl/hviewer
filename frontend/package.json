@@ -10,12 +10,12 @@
 		"postinstall": "chispa-cli --compile-html"
 	},
 	"dependencies": {
-		"chispa": "^0.9.1",
-		"hls.js": "^1.5.0",
-		"lucide-static": "^0.562.0"
+		"chispa": "^0.10.1",
+		"hls.js": "^1.6.16",
+		"lucide-static": "^1.20.0"
 	},
 	"devDependencies": {
-		"typescript": "^5.2.2",
-		"vite": "^7.0.0"
+		"typescript": "^6.0.3",
+		"vite": "^8.0.16"
 	}
 }
