@@ -260,7 +260,7 @@ export const PlayerView = component<PlayerProps>(({ videoPath, onBack }) => {
 			inner: () =>
 				audioTrackList.get().map((t) =>
 					tpl.audioBtn({
-						inner: '[T' + t.id + '] ' + t.name,
+						inner: t.name,
 						classes: { 'is-active': () => currentAudio.get() === t.id },
 						onclick: () => switchAudio(t.id),
 					})

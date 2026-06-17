@@ -210,7 +210,9 @@ export class HlsSessionService {
 			audioStreams.forEach((s, i) => {
 				const isDefault = i === 0 ? 'YES' : 'NO';
 				const lang = s.tags?.language ?? `track${i + 1}`;
-				const name = s.tags?.title ?? s.tags?.language ?? `Audio ${i + 1}`;
+				const baseName = s.tags?.title ?? s.tags?.language ?? `Audio ${i + 1}`;
+				const channelsLabel = s.channels && s.channels > 2 ? `${s.channels}ch` : s.channels === 1 ? 'mono' : 'stereo';
+				const name = `[T${i}] ${baseName} (${channelsLabel})`;
 				// variant index: 0=video-only, 1+i=audio track i
 				lines.push(`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",LANGUAGE="${lang}",NAME="${name}",DEFAULT=${isDefault},URI="${base}/${i + 1}/stream.m3u8"`);
 			});
