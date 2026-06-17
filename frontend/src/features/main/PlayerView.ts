@@ -140,7 +140,7 @@ export const PlayerView = component<PlayerProps>(({ videoPath, onBack }) => {
 		const track = document.createElement('track');
 		track.setAttribute('data-hv', '');
 		track.kind = 'subtitles';
-				track.src = api.getSubtitleUrl(videoPath, localIdx);
+		track.src = api.getSubtitleUrl(videoPath, localIdx);
 		track.default = true;
 		videoEl.appendChild(track);
 
@@ -260,7 +260,7 @@ export const PlayerView = component<PlayerProps>(({ videoPath, onBack }) => {
 			inner: () =>
 				audioTrackList.get().map((t) =>
 					tpl.audioBtn({
-						inner: t.name,
+						inner: '[T' + t.id + '] ' + t.name,
 						classes: { 'is-active': () => currentAudio.get() === t.id },
 						onclick: () => switchAudio(t.id),
 					})
