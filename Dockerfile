@@ -39,7 +39,7 @@ RUN ARCH=$(uname -m) && \
     else \
         FF_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"; \
     fi && \
-    wget -q "$FF_URL" -O /tmp/ffmpeg.tar.xz && \
+    wget -v "$FF_URL" -O /tmp/ffmpeg.tar.xz && \
     mkdir /tmp/ff && \
     tar -xf /tmp/ffmpeg.tar.xz -C /tmp/ff --strip-components=1 && \
     install -m 0755 /tmp/ff/ffmpeg  /usr/local/bin/ffmpeg && \
