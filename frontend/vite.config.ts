@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import { chispaHtmlPlugin } from 'chispa/vite-plugin';
-import manifest from '../app-manifest.json';
+import manifest from '../app-manifest.json' with { type: 'json' };
 
 export default defineConfig({
 	plugins: [chispaHtmlPlugin()],

@@ -12,5 +12,8 @@
 			]
 		}
 	},
+	"mounts": [
+		"source=${localEnv:HOME}/,target=/host-home,type=bind"
+	],
 	"postCreateCommand": "bash ./.devcontainer/install-ffmpeg.sh && cd frontend && npm install && cd ../backend && npm install"
 }
