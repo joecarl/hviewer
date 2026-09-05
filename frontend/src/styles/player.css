@@ -98,6 +98,21 @@
 	}
 }
 
+/* ── Playback status banner ────────────────────── */
+/*
+ * Shown when playback needs explaining: the browser rejected the source codec
+ * and we fell back to a server-side transcode, or decoding failed outright.
+ */
+.hv-player-status {
+	padding: 6px 14px;
+	background: rgba(249, 115, 22, 0.12);
+	border-bottom: 1px solid rgba(249, 115, 22, 0.25);
+	color: #fb923c;
+	font-size: 12px;
+	line-height: 1.5;
+	flex-shrink: 0;
+}
+
 /* ── Video element ───────────────────────────────────────────── */
 .hv-video-container {
 	flex: 1;

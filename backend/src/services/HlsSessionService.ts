@@ -18,6 +18,7 @@ export interface ProbeStream {
 	height?: number;
 	r_frame_rate?: string;
 	pix_fmt?: string;
+	profile?: string;
 	// audio
 	channels?: number;
 	channel_layout?: string;
@@ -35,9 +36,66 @@ export interface ProbeResult {
 	format: ProbeFormat;
 }
 
+// ── Client capabilities & copy/transcode planning ────────────────────────────
+// Which video codecs can be decoded is a property of the *client*, not of the
+// file: Safari plays HEVC, Firefox essentially never does, and Chrome only does
+// when the machine has a hardware decoder. So the browser reports what it can
+// decode (?caps=) and we decide per client whether to remux or re-encode.
+
+export interface ClientCaps {
+	hevc: boolean; // 8-bit HEVC (Main)
+	hevc10: boolean; // 10-bit HEVC (Main 10)
+}
+
+export type VideoMode = 'copy' | 'x264';
+
+export interface VideoPlan {
+	mode: VideoMode;
+	reason: string;
+}
+
+export const H264_ONLY_CAPS: ClientCaps = { hevc: false, hevc10: false };
+
+// Absent or unparseable caps mean "H.264 only" — the safe default. A client that
+// can't tell us what it decodes gets a stream every browser can play.
+export function parseCaps(raw: unknown): ClientCaps {
+	const list = typeof raw === 'string' ? raw.toLowerCase().split(',') : [];
+	return { hevc: list.includes('hevc'), hevc10: list.includes('hevc10') };
+}
+
+// H.264 profiles browsers actually ship a decoder for. High 10 / 4:2:2 / 4:4:4
+// are valid H.264 that no browser can decode, so they have to be re-encoded too.
+const BROWSER_H264_PROFILES = new Set(['baseline', 'constrained baseline', 'main', 'high']);
+
+const isHighBitDepth = (pixFmt?: string): boolean => /10|12|16/.test(pixFmt ?? '');
+
+export function planVideo(videoStream: ProbeStream | undefined, caps: ClientCaps): VideoPlan {
+	if (!videoStream) return { mode: 'x264', reason: 'no video stream found' };
+
+	const codec = videoStream.codec_name;
+	const profile = videoStream.profile?.toLowerCase() ?? '';
+	const tenBit = isHighBitDepth(videoStream.pix_fmt);
+
+	if (codec === 'h264') {
+		if (tenBit || (profile && !BROWSER_H264_PROFILES.has(profile))) {
+			return { mode: 'x264', reason: `H.264 ${videoStream.profile ?? videoStream.pix_fmt} has no browser decoder` };
+		}
+		return { mode: 'copy', reason: 'H.264 plays everywhere' };
+	}
+
+	if (codec === 'hevc' || codec === 'h265') {
+		if (!caps.hevc) return { mode: 'x264', reason: 'client cannot decode HEVC' };
+		if (tenBit && !caps.hevc10) return { mode: 'x264', reason: 'client cannot decode 10-bit HEVC (Main 10)' };
+		return { mode: 'copy', reason: 'client reports HEVC support' };
+	}
+
+	return { mode: 'x264', reason: `${codec} cannot be carried over HLS` };
+}
+
 export interface HlsSession {
 	videoPath: string;
 	sessionDir: string;
+	mode: VideoMode; // copy or re-encode — fixed for the life of the session
 	probe: ProbeResult;
 	audioStreams: ProbeStream[];
 	subtitleStreams: ProbeStream[];
@@ -53,13 +111,22 @@ export interface HlsSession {
 
 export class HlsSessionService {
 	private sessions = new Map<string, HlsSession>();
+	// Creations in flight, so concurrent requests for the same session share one
+	// FFmpeg instead of each spawning their own.
+	private pending = new Map<string, Promise<HlsSession>>();
 	private cleanupTimer: ReturnType<typeof setInterval>;
 	private readonly ffmpegBin: string;
 	private readonly ffprobeBin: string;
+	private readonly maxTranscodeHeight: number;
+	private readonly transcodePreset: string;
 
 	constructor() {
 		this.ffmpegBin = process.env.FFMPEG_PATH ?? 'ffmpeg';
 		this.ffprobeBin = process.env.FFPROBE_PATH ?? 'ffprobe';
+		// Re-encoding 4K in realtime is out of reach for most CPUs, so downscale by
+		// default rather than let the player stall waiting for segments. 0 disables.
+		this.maxTranscodeHeight = parseInt(process.env.TRANSCODE_MAX_HEIGHT ?? '1080', 10) || 0;
+		this.transcodePreset = process.env.TRANSCODE_PRESET ?? 'veryfast';
 		// Clean up idle sessions every minute
 		this.cleanupTimer = setInterval(() => this.cleanupIdle(), 60_000);
 	}
@@ -90,25 +157,64 @@ export class HlsSessionService {
 
 	// ── Session management ──────────────────────────────────────────────────────
 
-	async getOrCreateSession(videoId: string, videoPath: string): Promise<HlsSession> {
-		const existing = this.sessions.get(videoId);
+	// Sessions are keyed by file *and* mode: the same video can legitimately be
+	// copied for a Safari client and re-encoded for a Firefox one at the same time.
+	private static key(videoId: string, mode: VideoMode): string {
+		return `${videoId}/${mode}`;
+	}
+
+	async getOrCreateSession(videoId: string, videoPath: string, opts: { caps?: ClientCaps; mode?: VideoMode } = {}): Promise<HlsSession> {
+		// Every playlist and segment URL we emit carries its mode, so the common
+		// case resolves straight from the cache without paying for an ffprobe.
+		if (opts.mode) {
+			const hit = this.sessions.get(HlsSessionService.key(videoId, opts.mode));
+			if (hit) {
+				hit.lastAccess = Date.now();
+				return hit;
+			}
+		}
+
+		const probeResult = await this.probe(videoPath);
+		const videoStream = probeResult.streams.find((s) => s.codec_type === 'video');
+		const plan = planVideo(videoStream, opts.caps ?? H264_ONLY_CAPS);
+		const mode = opts.mode ?? plan.mode;
+		const key = HlsSessionService.key(videoId, mode);
+
+		const existing = this.sessions.get(key);
 		if (existing) {
 			existing.lastAccess = Date.now();
 			return existing;
 		}
 
-		const probeResult = await this.probe(videoPath);
+		// hls.js requests the video and audio variants at once; without this guard
+		// each request would create its own session and orphan an FFmpeg process.
+		const inFlight = this.pending.get(key);
+		if (inFlight) return inFlight;
+
+		if (!opts.mode) {
+			console.log(`[Plan] ${videoStream?.codec_name ?? 'unknown'} → ${mode} (${plan.reason}) for ${videoPath}`);
+		}
+
+		const creation = this.createSession(key, videoPath, mode, probeResult).finally(() => this.pending.delete(key));
+		this.pending.set(key, creation);
+		return creation;
+	}
+
+	private async createSession(key: string, videoPath: string, mode: VideoMode, probeResult: ProbeResult): Promise<HlsSession> {
 		const audioStreams = probeResult.streams.filter((s) => s.codec_type === 'audio');
 		const subtitleStreams = probeResult.streams.filter((s) => s.codec_type === 'subtitle');
 		const totalDuration = parseFloat(probeResult.format.duration) || 0;
 		const totalSegments = Math.ceil(totalDuration / SEG_DURATION) || 1;
 
-		const sessionDir = path.join(os.tmpdir(), 'hviewer', videoId);
+		// Mode goes in the path so a copy and a transcode of the same file never
+		// share segment files.
+		const sessionDir = path.join(os.tmpdir(), 'hviewer', key);
 		mkdirSync(sessionDir, { recursive: true });
 
 		const session: HlsSession = {
 			videoPath,
 			sessionDir,
+			mode,
 			probe: probeResult,
 			audioStreams,
 			subtitleStreams,
@@ -120,8 +226,15 @@ export class HlsSessionService {
 			restartPromise: null,
 		};
 
-		this.sessions.set(videoId, session);
-		await this.startFfmpeg(session, videoId, 0);
+		this.sessions.set(key, session);
+		try {
+			await this.startFfmpeg(session, key, 0);
+		} catch (err) {
+			// A session whose first segment never appeared is useless — drop it so the
+			// next request retries from scratch instead of waiting on a dead FFmpeg.
+			this.killSession(key);
+			throw err;
+		}
 
 		return session;
 	}
@@ -150,13 +263,20 @@ export class HlsSessionService {
 		args.push('-map', '0:v:0');
 		audioStreams.forEach((_, i) => args.push('-map', `0:a:${i}`));
 
-		// Video codec — copy h264/hevc directly (no re-encode needed for HLS/TS)
+		// Video codec — the mode was decided from what the *client* can decode, so a
+		// browser without an HEVC decoder gets H.264 instead of an unplayable stream.
 		const videoStream = probe.streams.find((s) => s.codec_type === 'video');
-		const vCodec = videoStream?.codec_name ?? '';
-		if (vCodec === 'h264' || vCodec === 'hevc' || vCodec === 'h265') {
+		if (session.mode === 'copy') {
 			args.push('-c:v', 'copy');
 		} else {
-			args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p');
+			args.push('-c:v', 'libx264', '-preset', this.transcodePreset, '-crf', '23', '-pix_fmt', 'yuv420p', '-profile:v', 'high');
+			// Keyframes must land on segment boundaries: the playlist advertises exactly
+			// SEG_DURATION per segment and -hls_time can only cut on an IDR frame.
+			args.push('-force_key_frames', `expr:gte(t,n_forced*${SEG_DURATION})`);
+			const height = videoStream?.height ?? 0;
+			if (this.maxTranscodeHeight > 0 && height > this.maxTranscodeHeight) {
+				args.push('-vf', `scale=-2:${this.maxTranscodeHeight}`);
+			}
 		}
 
 		// Audio: always re-encode to stereo AAC (browsers can't decode 5.1 AAC via MSE)
@@ -203,6 +323,9 @@ export class HlsSessionService {
 	buildMasterPlaylist(session: HlsSession, videoId: string): string {
 		const { audioStreams } = session;
 		const base = `/api/videos/${videoId}/hls`;
+		// ?m= pins every child request to the session this master resolved, so a
+		// client never mixes segments from a copy session with a transcoded one.
+		const q = `?m=${session.mode}`;
 		const lines: string[] = ['#EXTM3U', ''];
 
 		// EXT-X-MEDIA for every audio track
@@ -214,7 +337,9 @@ export class HlsSessionService {
 				const channelsLabel = s.channels && s.channels > 2 ? `${s.channels}ch` : s.channels === 1 ? 'mono' : 'stereo';
 				const name = `[T${i}] ${baseName} (${channelsLabel})`;
 				// variant index: 0=video-only, 1+i=audio track i
-				lines.push(`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",LANGUAGE="${lang}",NAME="${name}",DEFAULT=${isDefault},URI="${base}/${i + 1}/stream.m3u8"`);
+				lines.push(
+					`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",LANGUAGE="${lang}",NAME="${name}",DEFAULT=${isDefault},URI="${base}/${i + 1}/stream.m3u8${q}"`
+				);
 			});
 			lines.push('');
 		}
@@ -222,7 +347,7 @@ export class HlsSessionService {
 		// Single video variant
 		const audioAttr = audioStreams.length > 0 ? ',AUDIO="aud"' : '';
 		lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=4000000${audioAttr}`);
-		lines.push(`${base}/0/stream.m3u8`);
+		lines.push(`${base}/0/stream.m3u8${q}`);
 
 		return lines.join('\n');
 	}
@@ -236,6 +361,7 @@ export class HlsSessionService {
 	buildVariantPlaylist(session: HlsSession, variantIdx: number, videoId: string): string {
 		const { totalDuration, totalSegments } = session;
 		const base = `/api/videos/${videoId}/hls/${variantIdx}`;
+		const q = `?m=${session.mode}`;
 		const lines: string[] = ['#EXTM3U', '#EXT-X-VERSION:3', `#EXT-X-TARGETDURATION:${SEG_DURATION + 1}`, '#EXT-X-PLAYLIST-TYPE:VOD', ''];
 
 		// Always list the full timeline from segment 0 so the seekbar covers the whole
@@ -246,7 +372,7 @@ export class HlsSessionService {
 			const isLast = i === totalSegments - 1;
 			const dur = isLast ? Math.max(totalDuration - i * SEG_DURATION, 0).toFixed(6) : SEG_DURATION.toFixed(6);
 			lines.push(`#EXTINF:${dur},`);
-			lines.push(`${base}/seg${String(i).padStart(6, '0')}.ts`);
+			lines.push(`${base}/seg${String(i).padStart(6, '0')}.ts${q}`);
 		}
 
 		lines.push('#EXT-X-ENDLIST');
@@ -393,8 +519,8 @@ export class HlsSessionService {
 		});
 	}
 
-	getSession(videoId: string): HlsSession | undefined {
-		return this.sessions.get(videoId);
+	getSession(videoId: string, mode: VideoMode): HlsSession | undefined {
+		return this.sessions.get(HlsSessionService.key(videoId, mode));
 	}
 
 	// ── Cleanup ─────────────────────────────────────────────────────────────────
@@ -409,14 +535,14 @@ export class HlsSessionService {
 		}
 	}
 
-	killSession(videoId: string): void {
-		const session = this.sessions.get(videoId);
+	killSession(sessionKey: string): void {
+		const session = this.sessions.get(sessionKey);
 		if (!session) return;
 		session.process?.kill('SIGTERM');
 		try {
 			rmSync(session.sessionDir, { recursive: true, force: true });
 		} catch {}
-		this.sessions.delete(videoId);
-		console.log(`[HLS] Session cleaned up: ${videoId}`);
+		this.sessions.delete(sessionKey);
+		console.log(`[HLS] Session cleaned up: ${sessionKey}`);
 	}
 }

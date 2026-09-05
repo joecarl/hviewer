@@ -25,6 +25,17 @@ Then open `http://localhost:8945`.
 | `PORT`         | `8945`    | Port the backend listens on                         |
 | `FFMPEG_PATH`  | `ffmpeg`  | Path to the ffmpeg binary                           |
 | `FFPROBE_PATH` | `ffprobe` | Path to the ffprobe binary                          |
+| `TRANSCODE_MAX_HEIGHT` | `1080` | Cap on output height when re-encoding (`0` = keep source resolution) |
+| `TRANSCODE_PRESET` | `veryfast` | x264 preset used when re-encoding |
+
+## Codec handling
+
+H.264 is streamed as-is. HEVC is only copied when the browser reports that it can
+decode it (`MediaSource.isTypeSupported`) — Safari can, Firefox generally cannot,
+and Chrome only can where the machine has a hardware decoder — otherwise the
+backend re-encodes to H.264 on the fly. Anything else is re-encoded too, as are
+10-bit H.264 and 10-bit HEVC on clients without Main 10 support. The player's
+info bar (ⓘ) shows which path a file took for the browser you are using.
 
 ## Supported formats
 

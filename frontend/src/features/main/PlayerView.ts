@@ -38,18 +38,26 @@ export const PlayerView = component<PlayerProps>(({ videoPath, onBack }) => {
 	const infoAudioText = signal('');
 	const infoDurationText = signal('');
 
+	// ── Playback status ───────────────────────────────────────────────────────
+	const statusText = signal('');
+
 	let hls: Hls | null = null;
 	let videoEl: HTMLVideoElement | null = null;
+	// Set once we've asked the server to re-encode after the browser rejected the
+	// original stream — guards against bouncing between the two forever.
+	let forcedTranscode = false;
+	let mediaErrorRecoveries = 0;
 
 	// ── HLS init ─────────────────────────────────────────────────────────────
-	const initHls = (el: HTMLVideoElement) => {
+	const initHls = (el: HTMLVideoElement, forceTranscode = false) => {
 		videoEl = el;
 		if (hls) {
 			hls.destroy();
 			hls = null;
 		}
+		mediaErrorRecoveries = 0;
 
-		const masterUrl = api.getMasterPlaylistUrl(videoPath);
+		const masterUrl = api.getMasterPlaylistUrl(videoPath, forceTranscode);
 
 		if (Hls.isSupported()) {
 			hls = new Hls({
@@ -79,6 +87,13 @@ export const PlayerView = component<PlayerProps>(({ videoPath, onBack }) => {
 				currentAudio.set(hls!.audioTrack);
 			});
 
+			// Media is flowing again — clear any warning we put up. initHls can run twice
+			// (transcode fallback), so bind once per element instead of stacking listeners.
+			if (!el.dataset['hvStatusBound']) {
+				el.dataset['hvStatusBound'] = '1';
+				el.addEventListener('playing', () => statusText.set(''));
+			}
+
 			hls.on(Hls.Events.MANIFEST_PARSED, () => {
 				el.play().catch(() => {
 					/* autoplay blocked, fine */
@@ -98,11 +113,39 @@ export const PlayerView = component<PlayerProps>(({ videoPath, onBack }) => {
 
 			hls.on(Hls.Events.ERROR, (_, data) => {
 				console.warn('[HLS] Error:', data.type, data.details, data.fatal);
+
+				// The browser refused the codec we sent it. Our capability probe said it
+				// could decode this, so it was wrong (or the decoder is unavailable right
+				// now) — ask the server for an H.264 re-encode instead. Checked before the
+				// fatal filter because BUFFER_ADD_CODEC_ERROR is reported as non-fatal.
+				const codecRejected =
+					data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR ||
+					data.details === Hls.ErrorDetails.BUFFER_INCOMPATIBLE_CODECS_ERROR ||
+					data.details === Hls.ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR;
+
+				if (codecRejected && !forcedTranscode) {
+					console.warn('[HLS] Codec rejected by this browser — falling back to a server-side H.264 transcode');
+					forcedTranscode = true;
+					statusText.set('This browser cannot decode the original codec — re-encoding on the server, this may take a moment…');
+					initHls(el, true);
+					return;
+				}
+
 				if (!data.fatal) return;
 
 				// Without recovery, a fatal error leaves hls.js dead and the video element
 				// frozen with whatever was buffered (appears as "seekbar shrinks to ~20 s").
 				if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+					// recoverMediaError() re-arms the pipeline, but when the media is simply
+					// undecodable it fails again immediately — cap the retries so we surface
+					// the problem instead of spinning forever on a black frame.
+					if (++mediaErrorRecoveries > 3) {
+						console.error('[HLS] Media error recovery exhausted — giving up');
+						statusText.set('Playback failed: this browser could not decode the stream.');
+						hls!.destroy();
+						hls = null;
+						return;
+					}
 					console.warn('[HLS] Recovering from fatal media error…');
 					hls!.recoverMediaError();
 				} else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -114,12 +157,15 @@ export const PlayerView = component<PlayerProps>(({ videoPath, onBack }) => {
 					hls!.startLoad(currentTime);
 				} else {
 					console.error('[HLS] Unrecoverable fatal error:', data);
+					statusText.set(`Playback failed: ${data.details}`);
 				}
 			});
 		} else if (el.canPlayType('application/vnd.apple.mpegurl')) {
 			// Safari native HLS
 			el.src = masterUrl;
 			el.play().catch(() => {});
+		} else {
+			statusText.set('This browser supports neither Media Source Extensions nor native HLS.');
 		}
 	};
 
@@ -176,8 +222,14 @@ export const PlayerView = component<PlayerProps>(({ videoPath, onBack }) => {
 			const codec = vStream.codec_name.toUpperCase();
 			const res = vStream.width && vStream.height ? `${vStream.width}×${vStream.height}` : '';
 			const fps = parseFps(vStream.r_frame_rate);
-			const copyable = vStream.codec_name === 'h264' || vStream.codec_name === 'hevc' || vStream.codec_name === 'h265';
-			const badge = copyable ? ' <span class="hv-badge hv-badge--copy">copy</span>' : ' <span class="hv-badge hv-badge--transcode">→ libx264</span>';
+			// The backend decides copy-vs-transcode from this browser's own codec
+			// support, so show its answer rather than guessing from the codec name.
+			const plan = details.video;
+			const reason = (plan?.reason ?? '').replace(/"/g, '&quot;');
+			const badge =
+				plan?.mode === 'copy'
+					? ` <span class="hv-badge hv-badge--copy" title="${reason}">copy</span>`
+					: ` <span class="hv-badge hv-badge--transcode" title="${reason}">→ H.264</span>`;
 			infoVideoText.set(`${codec}${res ? ' · ' + res : ''}${fps ? ' · ' + fps : ''}${badge}`);
 		}
 
@@ -242,6 +294,11 @@ export const PlayerView = component<PlayerProps>(({ videoPath, onBack }) => {
 
 		infoDuration: {
 			innerHTML: () => infoDurationText.get() || '',
+		},
+
+		playerStatus: {
+			inner: () => statusText.get(),
+			classes: { hidden: () => !statusText.get() },
 		},
 
 		videoEl: {

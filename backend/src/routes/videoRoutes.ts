@@ -2,7 +2,7 @@ import { Router } from 'express';
 import path from 'path';
 import { container } from '../services/container/ServiceContainer';
 import { VideoScannerService } from '../services/VideoScannerService';
-import { HlsSessionService } from '../services/HlsSessionService';
+import { HlsSessionService, parseCaps, planVideo, type VideoMode } from '../services/HlsSessionService';
 
 // ── Session ID helpers ────────────────────────────────────────────────────────
 // The session ID is a base64url-encoded absolute file path.
@@ -12,6 +12,15 @@ function sessionIdToPath(sessionId: string): string {
 	const b64 = sessionId.replace(/-/g, '+').replace(/_/g, '/');
 	const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
 	return Buffer.from(padded, 'base64').toString('latin1');
+}
+
+// ── Client capability helpers ─────────────────────────────────────────────────
+// The master playlist resolves copy-vs-transcode from ?caps= (what the browser
+// says it can decode) and stamps the answer as ?m= on every URL it emits, so the
+// follow-up requests land on that same session without re-probing the file.
+
+function modeFromQuery(raw: unknown): VideoMode | undefined {
+	return raw === 'copy' || raw === 'x264' ? raw : undefined;
 }
 
 export function videoRoutes(): Router {
@@ -42,7 +51,11 @@ export function videoRoutes(): Router {
 			const video = scanner.resolveVideoPath(filePath);
 			const probe = await hlsService.probe(video.path);
 			const duration = parseFloat(probe.format.duration) || 0;
-			res.json({ name: video.name, size: video.size, streams: probe.streams, duration });
+			const plan = planVideo(
+				probe.streams.find((s) => s.codec_type === 'video'),
+				parseCaps(req.query['caps'])
+			);
+			res.json({ name: video.name, size: video.size, streams: probe.streams, duration, video: plan });
 		} catch (err) {
 				res.status(500).json({ error: (err as Error).message });
 		}
@@ -54,7 +67,13 @@ export function videoRoutes(): Router {
 		const { sessionId } = req.params;
 		try {
 			const video = scanner.resolveVideoPath(sessionIdToPath(sessionId));
-			const session = await hlsService.getOrCreateSession(sessionId, video.path);
+			// ?force=x264 is the client's escape hatch: it asks for a transcode after the
+			// browser rejected a stream our capability probe thought it could decode.
+			const forced = req.query['force'] === 'x264' ? ('x264' as VideoMode) : undefined;
+			const session = await hlsService.getOrCreateSession(sessionId, video.path, {
+				caps: parseCaps(req.query['caps']),
+				mode: forced,
+			});
 			res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
 			res.setHeader('Cache-Control', 'no-cache');
 			res.send(hlsService.buildMasterPlaylist(session, sessionId));
@@ -73,7 +92,10 @@ export function videoRoutes(): Router {
 		}
 		try {
 			const video = scanner.resolveVideoPath(sessionIdToPath(sessionId));
-			const session = await hlsService.getOrCreateSession(sessionId, video.path);
+			const session = await hlsService.getOrCreateSession(sessionId, video.path, {
+				caps: parseCaps(req.query['caps']),
+				mode: modeFromQuery(req.query['m']),
+			});
 			session.lastAccess = Date.now();
 			const variantIdx = parseInt(req.params.variant, 10);
 			res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
@@ -95,7 +117,10 @@ export function videoRoutes(): Router {
 		const segIdx = parseInt(segment.slice(3, -3), 10);
 		try {
 			const video = scanner.resolveVideoPath(sessionIdToPath(sessionId));
-			const session = await hlsService.getOrCreateSession(sessionId, video.path);
+			const session = await hlsService.getOrCreateSession(sessionId, video.path, {
+				caps: parseCaps(req.query['caps']),
+				mode: modeFromQuery(req.query['m']),
+			});
 			session.lastAccess = Date.now();
 			const segPath = await hlsService.ensureSegmentAvailable(session, sessionId, req.params.variant, segIdx);
 			res.setHeader('Content-Type', 'video/MP2T');
